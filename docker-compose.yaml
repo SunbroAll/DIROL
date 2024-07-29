@@ -13,3 +13,4 @@ services:
       - API_KEY=${API_KEY}
       - FACESWAP_API_URL=${FACESWAP_API_URL}
       - RESULT_API_URL=${RESULT_API_URL}
+    restart: always
