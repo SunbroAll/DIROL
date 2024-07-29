@@ -8,8 +8,13 @@ from PIL import Image
 from io import BytesIO
 import cv2
 import numpy as np
+import logging
 
 app = FastAPI()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Предварительно заданные ссылки для замены лица
 target_image_urls = [
@@ -23,9 +28,9 @@ target_image_urls = [
     'https://i.postimg.cc/J76Q8zwZ/7.png',
 ]
 
-api_key = 'clysfcx8w000hmf09e6y51l1y'
-faceswap_api_url = 'https://api.magicapi.dev/api/v1/capix/faceswap/faceswap/v1/image'
-result_api_url = 'https://api.magicapi.dev/api/v1/capix/faceswap/result/'
+api_key = os.getenv('API_KEY')
+faceswap_api_url = os.getenv('FACESWAP_API_URL')
+result_api_url = os.getenv('RESULT_API_URL')
 
 # Путь к папке с логотипами
 logo_folder = 'hair'  # Убедитесь, что путь к папке правильный
@@ -48,6 +53,7 @@ def send_faceswap_request(target_url, swap_url):
     data = f'target_url={target_url}&swap_url={swap_url}'
 
     response = requests.post(faceswap_api_url, headers=headers, data=data)
+    logger.info(f"Faceswap API response: {response.json()}")
     return response.json()
 
 # Функция для получения результата faceswap
@@ -60,6 +66,7 @@ def retrieve_faceswap_result(request_id):
     data = f'request_id={request_id}'
     
     response = requests.post(result_api_url, headers=headers, data=data)
+    logger.info(f"Retrieve result API response: {response.json()}")
     return response.json()
 
 # Функция для наложения логотипа
@@ -77,6 +84,7 @@ def overlay_logo(background_image_path, logo_path):
         
         return output_path
     except Exception as e:
+        logger.error(f"Error overlaying logo: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error overlaying logo: {str(e)}")
 
 # Функция для апскейлинга изображения
@@ -114,55 +122,61 @@ def detect_and_enlarge_eyes(image):
 
 @app.post("/faceswap/")
 def faceswap(request: FaceSwapRequest):
-    if request.target_index < 0 or request.target_index >= len(target_image_urls):
-        raise HTTPException(status_code=400, detail="Invalid target index")
-    
-    swap_url = request.swap_url
-    target_url = target_image_urls[request.target_index]
-    
-    faceswap_response = send_faceswap_request(target_url, swap_url)
-    
-    if 'image_process_response' in faceswap_response and faceswap_response['image_process_response']['status'] == 'OK':
-        request_id = faceswap_response['image_process_response']['request_id']
+    try:
+        if request.target_index < 0 or request.target_index >= len(target_image_urls):
+            raise HTTPException(status_code=400, detail="Invalid target index")
         
-        # Ждем некоторое время перед получением результата (если требуется)
-        time.sleep(5)  # Ждем 5 секунд для примера
+        swap_url = request.swap_url
+        target_url = target_image_urls[request.target_index]
         
-        result_response = retrieve_faceswap_result(request_id)
+        faceswap_response = send_faceswap_request(target_url, swap_url)
         
-        if 'image_process_response' in result_response and result_response['image_process_response']['status'] == 'OK':
-            processed_image_url = result_response['image_process_response']['result_url']
+        if 'image_process_response' in faceswap_response and faceswap_response['image_process_response']['status'] == 'OK':
+            request_id = faceswap_response['image_process_response']['request_id']
             
-            # Загрузка изображения для обработки
-            response = requests.get(processed_image_url)
-            image = Image.open(BytesIO(response.content))
-
-            # Апскейлинг изображения
-            scale_factor = 2.0  # Фактор масштабирования (например, увеличиваем в 2 раза)
-            upscaled_image = upscale_image(image, scale_factor)
-
-            # Преобразование изображения обратно в массив numpy для дальнейшей обработки
-            image = np.array(upscaled_image)
-
-            # Увеличение глаз
-            image = detect_and_enlarge_eyes(image)
-
-            # Сохранение временного изображения
-            temp_image_path = 'temp_enlarged_eyes.png'
-            cv2.imwrite(temp_image_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-
-            # Определение пути к логотипу на основе target_index
-            logo_path = os.path.join(logo_folder, f"{request.target_index}.png")
-
-            # Наложение логотипа
-            final_image_path = overlay_logo(temp_image_path, logo_path)
-            final_image_url = f"/static/{os.path.basename(final_image_path)}"
+            # Ждем некоторое время перед получением результата (если требуется)
+            time.sleep(5)  # Ждем 5 секунд для примера
             
-            return {"processed_image_url": processed_image_url, "final_image_url": final_image_url}
+            result_response = retrieve_faceswap_result(request_id)
+            
+            if 'image_process_response' in result_response and result_response['image_process_response']['status'] == 'OK':
+                processed_image_url = result_response['image_process_response']['result_url']
+                
+                # Загрузка изображения для обработки
+                response = requests.get(processed_image_url)
+                image = Image.open(BytesIO(response.content))
+
+                # Апскейлинг изображения
+                scale_factor = 2.0  # Фактор масштабирования (например, увеличиваем в 2 раза)
+                upscaled_image = upscale_image(image, scale_factor)
+
+                # Преобразование изображения обратно в массив numpy для дальнейшей обработки
+                image = np.array(upscaled_image)
+
+                # Увеличение глаз
+                image = detect_and_enlarge_eyes(image)
+
+                # Сохранение временного изображения
+                temp_image_path = 'temp_enlarged_eyes.png'
+                cv2.imwrite(temp_image_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+                # Определение пути к логотипу на основе target_index
+                logo_path = os.path.join(logo_folder, f"{request.target_index}.png")
+
+                # Наложение логотипа
+                final_image_path = overlay_logo(temp_image_path, logo_path)
+                final_image_url = f"/static/{os.path.basename(final_image_path)}"
+                
+                return {"processed_image_url": processed_image_url, "final_image_url": final_image_url}
+            else:
+                logger.error("Error retrieving face swap result")
+                raise HTTPException(status_code=500, detail="Error retrieving face swap result")
         else:
-            raise HTTPException(status_code=500, detail="Error retrieving face swap result")
-    else:
-        raise HTTPException(status_code=500, detail="Error initiating face swap")
+            logger.error("Error initiating face swap")
+            raise HTTPException(status_code=500, detail="Error initiating face swap")
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 # Подключаем папку для статических файлов
 app.mount("/static", StaticFiles(directory="static"), name="static")
