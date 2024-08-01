@@ -1,195 +1,121 @@
-import os
 import requests
 import time
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from PIL import Image
-from io import BytesIO
-import cv2
-import numpy as np
 import logging
+import os
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import JSONResponse
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = FastAPI()
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
-)
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Предварительно заданные ссылки для замены лица
-target_image_urls = [
-    'https://i.postimg.cc/J7pJbRbp/1.png',
-    'https://uc804b222d66b685597d9f1a5596.previews.dropboxusercontent.com/p/thumb/ACVRyfV-NtwfH4-fcXofm4VwAl94trFZincIoqXSjmisyIeXTozxbXHRxrufLud4nlod28iPMctoKzzyCFiKCfTe3V6HKWkiIvnop9rBF1Zh9jex2jKMMmYs9eNq-NKgL6w3KrgUBlOa-xZSVCvGprqw2cWET41Ji9Z49yv2Dirj42OMb5KOIWWUpu_NZn3leETX6INBoapu9UKBXDTiDWJaY64hH9Q5MAl-qafuuyB8Kw8WPQgkAjiTxHFBg8jFvPY4ubQj-S_SD4wAdnW8ZhSStvoca8Tj6mre1QS6ypeGxs5qoUE1PKuJJerqNYFenVQEs2V8j63GTSFtiJovoW1SQmQYTFDyhMW_TCnsVm7vBQ/p.png',
-    'https://i.postimg.cc/bJbbxn9b/3.png',
-    'https://i.postimg.cc/FR9mp5jZ/4.png',
-    'https://i.postimg.cc/NMfqT8cC/5.png',
-    'https://i.postimg.cc/pXrq5nQs/6.png',
-    'https://i.postimg.cc/Gmh5XLN9/7.png',
-    'https://i.postimg.cc/J76Q8zwZ/7.png',
+# Define the list of anime images
+anime_images = [
+    "D:\\ai\\DIROL_api\\anime\\01.png",
+    "D:\\ai\\DIROL_api\\anime\\2.png",
+    "D:\\ai\\DIROL_api\\anime\\3.png",
+    "D:\\ai\\DIROL_api\\anime\\4.png",
+    "D:\\ai\\DIROL_api\\anime\\5.png",
+    "D:\\ai\\DIROL_api\\anime\\6.png",
+    "D:\\ai\\DIROL_api\\anime\\7.png",
+    "D:\\ai\\DIROL_api\\anime\\8.png"
 ]
 
-api_key = os.getenv('API_KEY')
-faceswap_api_url = os.getenv('FACESWAP_API_URL')
-result_api_url = os.getenv('RESULT_API_URL')
+# Define the URLs and headers for the requests
+generate_url = "http://194.190.77.197:8881/generate"
+history_url_template = "http://194.190.77.197:8882/history/{}"
+upload_url = "http://194.190.77.197:8881/uploadfile"
+files_base_url = "http://194.190.77.197:8884/files"
+headers = {
+    "Content-Type": "application/json"
+}
 
-# Путь к папке с логотипами
-logo_folder = 'hair'  # Убедитесь, что путь к папке правильный
-
-# Создаем папку для статических файлов, если ее нет
-os.makedirs("static", exist_ok=True)
-
-# Модель данных для входных данных
-class FaceSwapRequest(BaseModel):
-    swap_url: str
-    target_index: int
-
-# Функция для отправки запроса на faceswap API
-def send_faceswap_request(target_url, swap_url):
-    headers = {
-        'accept': 'application/json',
-        'x-magicapi-key': api_key,
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-    data = f'target_url={target_url}&swap_url={swap_url}'
-
-    response = requests.post(faceswap_api_url, headers=headers, data=data)
-    logger.info(f"Faceswap API response: {response.json()}")
-    return response.json()
-
-# Функция для получения результата faceswap
-def retrieve_faceswap_result(request_id):
-    headers = {
-        'accept': 'application/json',
-        'x-magicapi-key': api_key,
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-    data = f'request_id={request_id}'
-    
-    response = requests.post(result_api_url, headers=headers, data=data)
-    logger.info(f"Retrieve result API response: {response.json()}")
-    return response.json()
-
-# Функция для наложения логотипа
-def overlay_logo(background_image_path, logo_path):
-    try:
-        background = Image.open(background_image_path).convert("RGBA")
-        logo = Image.open(logo_path).convert("RGBA")
-        logo = logo.resize(background.size)
-        
-        combined = Image.alpha_composite(background, logo)
-        
-        output_filename = f"combined_image_{int(time.time())}.png"
-        output_path = os.path.join("static", output_filename)
-        combined.save(output_path, format='PNG')
-        
-        return output_path
-    except Exception as e:
-        logger.error(f"Error overlaying logo: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error overlaying logo: {str(e)}")
-
-# Функция для апскейлинга изображения
-def upscale_image(image, scale_factor):
-    width, height = image.size
-    new_width = int(width * scale_factor)
-    new_height = int(height * scale_factor)
-    return image.resize((new_width, new_height), Image.LANCZOS)
-
-# Функция для увеличения глаз
-def apply_magnifying_glass_effect(image, center, radius, scale):
-    output = image.copy()
-    h, w = image.shape[:2]
-    for y in range(h):
-        for x in range(w):
-            dist = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2)
-            if dist < radius:
-                factor = 1 + (scale - 1) * (1 - dist / radius) ** 2
-                new_x = center[0] + (x - center[0]) * factor
-                new_y = center[1] + (y - center[1]) * factor
-                new_x = np.clip(new_x, 0, w - 1)
-                new_y = np.clip(new_y, 0, h - 1)
-                output[y, x] = image[int(new_y), int(new_x)]
-    return output
-
-def detect_and_enlarge_eyes(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-    eyes = eye_cascade.detectMultiScale(gray, 1.3, 5)
-    for (x, y, w, h) in eyes:
-        eye_center = (x + w // 2, y + h // 2)
-        radius = w // 2
-        image = apply_magnifying_glass_effect(image, eye_center, radius, 0.75)
-    return image
-
-@app.post("/faceswap/")
-def faceswap(request: FaceSwapRequest):
-    try:
-        if request.target_index < 0 or request.target_index >= len(target_image_urls):
-            raise HTTPException(status_code=400, detail="Invalid target index")
-        
-        swap_url = request.swap_url
-        target_url = target_image_urls[request.target_index]
-        
-        faceswap_response = send_faceswap_request(target_url, swap_url)
-        
-        if 'image_process_response' in faceswap_response and faceswap_response['image_process_response']['status'] == 'OK':
-            request_id = faceswap_response['image_process_response']['request_id']
-            
-            # Ждем некоторое время перед получением результата (если требуется)
-            time.sleep(5)  # Ждем 5 секунд для примера
-            
-            result_response = retrieve_faceswap_result(request_id)
-            
-            if 'image_process_response' in result_response and result_response['image_process_response']['status'] == 'OK':
-                processed_image_url = result_response['image_process_response']['result_url']
-                
-                # Загрузка изображения для обработки
-                response = requests.get(processed_image_url)
-                image = Image.open(BytesIO(response.content))
-
-                # Апскейлинг изображения
-                scale_factor = 2.0  # Фактор масштабирования (например, увеличиваем в 2 раза)
-                upscaled_image = upscale_image(image, scale_factor)
-
-                # Преобразование изображения обратно в массив numpy для дальнейшей обработки
-                image = np.array(upscaled_image)
-
-                # Увеличение глаз
-                image = detect_and_enlarge_eyes(image)
-
-                # Сохранение временного изображения
-                temp_image_path = 'temp_enlarged_eyes.png'
-                cv2.imwrite(temp_image_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-
-                # Определение пути к логотипу на основе target_index
-                logo_path = os.path.join(logo_folder, f"{request.target_index}.png")
-
-                # Наложение логотипа
-                final_image_path = overlay_logo(temp_image_path, logo_path)
-                final_image_url = f"/static/{os.path.basename(final_image_path)}"
-                
-                return {"processed_image_url": processed_image_url, "final_image_url": final_image_url}
-            else:
-                logger.error("Error retrieving face swap result")
-                raise HTTPException(status_code=500, detail="Error retrieving face swap result")
+# Function to check the status of the prompt and retrieve the filename
+def check_status(prompt_id, timeout=100, interval=1):
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        response = requests.get(history_url_template.format(prompt_id))
+        if response.status_code == 200:
+            response_json = response.json()
+            prompt_info = response_json.get(prompt_id, {})
+            status_info = prompt_info.get('status', {})
+            status = status_info.get('status_str', 'Unknown')
+            logging.info(f"Status of prompt {prompt_id}: {status}")
+            if status == 'success':
+                outputs = prompt_info.get('outputs', {})
+                images_info = outputs.get('90', {}).get('images', [])
+                if images_info:
+                    filename = images_info[0].get('filename')
+                    return filename
+                return True
+            elif status == 'failed':
+                return False
         else:
-            logger.error("Error initiating face swap")
-            raise HTTPException(status_code=500, detail="Error initiating face swap")
-    except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+            logging.error(f"Failed to get status for {prompt_id}: {response.status_code} {response.text}")
+        time.sleep(interval)
+    return False
 
-# Подключаем папку для статических файлов
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Function to upload a file to the server
+def upload_file(file):
+    response = requests.post(upload_url, files={'file': file})
+    if response.status_code == 200:
+        response_data = response.json()
+        # Construct the full path on the server
+        server_file_path = os.path.join("D:\\ai\\Dirol_api\\uploads", response_data['filename'])
+        return server_file_path
+    else:
+        logging.error(f"Failed to upload file: {response.status_code} {response.text}")
+        return None
+
+@app.post("/generate_image/")
+async def generate_image(anime_index: int = Form(...), girl_image: UploadFile = File(...)):
+    if not (0 <= anime_index - 1 < len(anime_images)):
+        raise HTTPException(status_code=400, detail=f"Invalid anime_index. Must be between 1 and {len(anime_images)}")
+    
+    anime_image = anime_images[anime_index - 1]
+    logging.info(f"Using anime image: {anime_image}")
+    logging.info(f"Uploading girl image: {girl_image.filename}")
+
+    # Upload the girl image
+    girl_image_path = upload_file(girl_image.file)
+    if not girl_image_path:
+        raise HTTPException(status_code=500, detail="Failed to upload girl image")
+
+    logging.info(f"Uploaded girl image path: {girl_image_path}")
+
+    # Define the payload for the POST request
+    payload = {
+        "image_path1": anime_image,
+        "image_path2": girl_image_path
+    }
+
+    # Make the POST request
+    response = requests.post(generate_url, headers=headers, json=payload)
+    response_data = response.json()
+
+    if response.status_code == 200:
+        prompt_id = response_data.get('prompt_id')
+        if prompt_id:
+            logging.info(f"Generated prompt ID: {prompt_id}")
+            # Check the status of the prompt and retrieve the filename
+            result = check_status(prompt_id)
+            if result is True:
+                logging.info(f"Prompt {prompt_id} completed successfully but no filename found.")
+                raise HTTPException(status_code=500, detail="No filename found in the successful prompt")
+            elif result:
+                file_url = f"{files_base_url}/{result}"
+                logging.info(f"Prompt {prompt_id} completed successfully. File URL: {file_url}")
+                return JSONResponse(content={"file_url": file_url})
+            else:
+                logging.error(f"Prompt {prompt_id} failed or timed out.")
+                raise HTTPException(status_code=500, detail="Image generation failed or timed out")
+        else:
+            logging.error("No prompt_id found in the response.")
+            raise HTTPException(status_code=500, detail="No prompt_id found in the response")
+    else:
+        logging.error(f"Failed to generate image: {response.status_code} {response_data.get('error')}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate image: {response_data.get('error')}")
 
 if __name__ == "__main__":
     import uvicorn
